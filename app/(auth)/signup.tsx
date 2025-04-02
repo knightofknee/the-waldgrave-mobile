@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../../firebaseConfig';
+import { doc, setDoc } from 'firebase/firestore';
+import { auth, db } from '../../firebaseConfig';
 import { router } from 'expo-router';
 
 export default function SignupScreen() {
@@ -17,7 +18,20 @@ export default function SignupScreen() {
     }
 
     try {
-      await createUserWithEmailAndPassword(auth, email, password);
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      // Save email + contact info to Firestore
+      const profileData = {
+        email: email.trim().toLowerCase(),
+        method: 'email',
+        contact: email.trim().toLowerCase(),
+        pushToken: null, // will be set after login
+        notificationsEnabled: true, // ✅ Default opt-in
+      };
+
+      await setDoc(doc(db, 'users', user.uid), profileData, { merge: true });
+
       router.replace('/');
     } catch (err: any) {
       alert(err.message);

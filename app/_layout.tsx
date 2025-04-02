@@ -6,7 +6,7 @@ export default function RootLayout() {
   const user = useAuth();
   const router = useRouter();
   const [ready, setReady] = useState(false);
-
+  const testing = false //!process.env.NODE_ENV.includes('test');
   useEffect(() => {
     if (user === null) {
       router.replace('/(auth)/login');

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Button, StyleSheet, Platform } from 'react-native';
-import { collection, onSnapshot, addDoc, deleteDoc, doc, setDoc } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, deleteDoc, doc, setDoc, getDocs, getDoc } from 'firebase/firestore';
 import { db, auth } from '@/firebaseConfig';
 import EditRecipientsModal from '@/components/EditRecipientsModal';
 import * as Notifications from 'expo-notifications';
@@ -18,7 +18,6 @@ export default function MainScreen() {
   const [friends, setFriends] = useState<Friend[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
 
-  // 🔁 Ensure user stays in sync after login
   useEffect(() => {
     const unsub = auth.onAuthStateChanged((u) => {
       setUser(u);
@@ -26,7 +25,6 @@ export default function MainScreen() {
     return unsub;
   }, []);
 
-  // ✅ Register push token after user is set
   useEffect(() => {
     const registerPushToken = async () => {
       if (!user || !Device.isDevice) return;
@@ -47,7 +45,6 @@ export default function MainScreen() {
       const tokenResponse = await Notifications.getExpoPushTokenAsync();
       const token = tokenResponse.data;
 
-      // Save the push token to Firestore
       await setDoc(doc(db, 'users', user.uid), {
         pushToken: token,
       }, { merge: true });
@@ -58,7 +55,6 @@ export default function MainScreen() {
     registerPushToken();
   }, [user]);
 
-  // 🔥 Load friends list
   useEffect(() => {
     if (!user) return;
 
@@ -107,11 +103,99 @@ export default function MainScreen() {
     }
   };
 
-  const triggerBeacon = () => {
-    friends.forEach((friend) => {
-      console.log(`Notify ${friend.name} at ${friend.value} via ${friend.method}`);
-      // Push logic to be added next
+  const sendPushNotification = async (token: string, message: string) => {
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Accept-encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        to: token,
+        sound: 'default',
+        title: '⚠️ Beacon Triggered',
+        body: message,
+      }),
     });
+  };
+
+  const triggerBeacon = async () => {
+    if (!user) return;
+
+    const allUsersSnapshot = await getDocs(collection(db, 'users'));
+    const allUsers = allUsersSnapshot.docs.map((docSnap) => ({
+      uid: docSnap.id,
+      ...(docSnap.data() as { email?: string; phone?: string }),
+    }));
+
+    const unreachable: Friend[] = [];
+
+    for (const friend of friends) {
+      const value = friend.value.trim().toLowerCase();
+
+      const basicMatch = allUsers.find((u) =>
+        u.email?.toLowerCase() === value || u.phone?.trim() === value
+      );
+
+      console.log("Matched basic user:", basicMatch?.email || basicMatch?.phone || 'none');
+
+      if (!basicMatch) {
+        unreachable.push(friend);
+        continue;
+      }
+
+      // Load the full user doc now that we know the UID
+      const fullUserDocRef = doc(db, 'users', basicMatch.uid);
+      const fullUserSnap = await getDoc(fullUserDocRef);
+
+      if (!fullUserSnap.exists()) {
+        console.error('User doc unexpectedly missing:', basicMatch.uid);
+        unreachable.push(friend);
+        continue;
+      }
+
+      const fullUser = fullUserSnap.data();
+
+      const hasValidPush =
+        typeof fullUser.pushToken === 'string' &&
+        fullUser.pushToken.startsWith('ExponentPushToken');
+
+      const notificationsAllowed = fullUser.notificationsEnabled !== false;
+      console.log('Pushhhhhhhhh:', fullUser);
+      if (hasValidPush && notificationsAllowed) {
+        try {
+          await fetch('https://exp.host/--/api/v2/push/send', {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              'Accept-encoding': 'gzip, deflate',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              to: fullUser.pushToken,
+              sound: 'default',
+              title: '⚠️ Beacon Triggered',
+              body: `${user.email} lit the beacon!`,
+            }),
+          });
+          console.log(`✅ Sent to ${friend.name}`);
+        } catch (err) {
+          console.error('Push send failed for:', friend.value, err);
+          unreachable.push(friend);
+        }
+      } else {
+        console.log('❌ No valid push token or disabled:', friend.name);
+        unreachable.push(friend);
+      }
+    }
+
+    if (unreachable.length > 0) {
+      console.log('Unreachable contacts:');
+      unreachable.forEach((f) =>
+        console.log(`- ${f.name}: ${f.value} (${f.method})`)
+      );
+    }
   };
 
   return (
